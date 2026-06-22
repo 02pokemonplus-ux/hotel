@@ -355,6 +355,39 @@
   /* ====== Quiz view ====== */
   .quiz-wrap { max-width: 560px; margin: 0 auto; }
 
+  .study-toolbar-row {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 14px;
+    margin-bottom: 22px;
+    flex-wrap: wrap;
+  }
+  .study-toolbar-row .inner-tabbar {
+    margin-bottom: 0;
+  }
+  .direction-toggle-btn {
+    padding: 8px 18px;
+    border-radius: var(--r-pill);
+    border: 1px solid var(--navy);
+    background: var(--card);
+    color: var(--navy);
+    font-size: 12px;
+    font-weight: 700;
+    cursor: pointer;
+    font-family: inherit;
+    transition: background 0.15s ease, color 0.15s ease;
+    white-space: nowrap;
+  }
+  .direction-toggle-btn:hover { background: var(--accent-soft); }
+
+  .quiz-progress {
+    text-align: center;
+    font-size: 12px;
+    color: var(--muted);
+    margin-bottom: 12px;
+  }
+
   .quiz-panel {
     background: var(--card);
     border: 1px solid var(--line);
@@ -761,10 +794,13 @@
 
   <!-- ============ STUDY (flashcard) VIEW ============ -->
   <section class="view" id="view-study">
-    <nav class="inner-tabbar" id="studyInnerTabbar">
-      <div class="inner-tab-item active" data-submode="memorize">記憶</div>
-      <div class="inner-tab-item" data-submode="quiz">測驗</div>
-    </nav>
+    <div class="study-toolbar-row">
+      <nav class="inner-tabbar" id="studyInnerTabbar">
+        <div class="inner-tab-item active" data-submode="memorize">記憶</div>
+        <div class="inner-tab-item" data-submode="quiz">測驗</div>
+      </nav>
+      <button class="direction-toggle-btn" id="directionToggleBtn" type="button" style="display:none;">切換為「中→日」</button>
+    </div>
 
     <!-- 記憶子視圖 -->
     <div class="inner-view active" id="study-memorize">
@@ -789,9 +825,10 @@
     <!-- 測驗子視圖 -->
     <div class="inner-view" id="study-quiz">
       <div class="quiz-wrap">
+        <div class="quiz-progress" id="quizProgress">第 1 題 / 共 10 題</div>
         <div id="quizContent">
           <div class="quiz-panel">
-            <div class="quiz-question-label">這個單字的中文意思是？</div>
+            <div class="quiz-question-label" id="quizQuestionLabel">這個單字的中文意思是？</div>
             <div class="quiz-jp" id="quizJp"></div>
             <div class="quiz-kana" id="quizKana"></div>
           </div>
@@ -1654,6 +1691,8 @@ let quizQueue = [];
 let quizIndex = 0;
 let quizScore = 0;
 let quizAnswered = false;
+let quizDirection = "jp2zh"; // "jp2zh" | "zh2jp"
+let autoAdvanceTimer = null;
 
 function shuffle(arr) {
   const a = arr.slice();
@@ -1670,6 +1709,11 @@ function refreshCatTabbarVisibility() {
   document.getElementById('catTabbar').style.display = needsCat ? 'flex' : 'none';
 }
 
+function refreshDirectionToggleVisibility() {
+  const showToggle = currentMode === 'study' && studySubMode === 'quiz';
+  document.getElementById('directionToggleBtn').style.display = showToggle ? 'inline-block' : 'none';
+}
+
 /* ---------- top-level mode tabs ---------- */
 document.querySelectorAll('#modeTabbar .tab-item').forEach(tab => {
   tab.addEventListener('click', () => {
@@ -1681,6 +1725,7 @@ document.querySelectorAll('#modeTabbar .tab-item').forEach(tab => {
     document.getElementById('view-' + currentMode).classList.add('active');
 
     refreshCatTabbarVisibility();
+    refreshDirectionToggleVisibility();
     enterCurrentMode();
   });
 });
@@ -1707,6 +1752,7 @@ document.getElementById('studyInnerTabbar').addEventListener('click', (e) => {
   document.querySelectorAll('#view-study .inner-view').forEach(v => v.classList.remove('active'));
   document.getElementById('study-' + studySubMode).classList.add('active');
   refreshCatTabbarVisibility();
+  refreshDirectionToggleVisibility();
   enterCurrentMode();
 });
 
@@ -1860,6 +1906,7 @@ function initQuiz() {
   quizIndex = 0;
   quizScore = 0;
   quizAnswered = false;
+  if (autoAdvanceTimer) { clearTimeout(autoAdvanceTimer); autoAdvanceTimer = null; }
   document.getElementById('quizContent').style.display = 'block';
   document.getElementById('quizResultView').style.display = 'none';
   renderQuizQuestion();
@@ -1870,15 +1917,33 @@ function renderQuizQuestion() {
   const itemIdx = quizQueue[quizIndex];
   const item = cat.items[itemIdx];
   quizAnswered = false;
+  if (autoAdvanceTimer) { clearTimeout(autoAdvanceTimer); autoAdvanceTimer = null; }
 
-  document.getElementById('quizJp').textContent = item.jp;
-  document.getElementById('quizKana').textContent = item.kana;
+  const label = document.getElementById('quizQuestionLabel');
+  const kanaEl = document.getElementById('quizKana');
+
+  if (quizDirection === 'jp2zh') {
+    label.textContent = '這個單字的中文意思是？';
+    document.getElementById('quizJp').textContent = item.jp;
+    kanaEl.textContent = item.kana;
+    kanaEl.style.display = '';
+  } else {
+    label.textContent = '這個中文對應的日文是？';
+    document.getElementById('quizJp').textContent = item.zh;
+    kanaEl.textContent = '';
+    kanaEl.style.display = 'none';
+  }
+
   document.getElementById('quizFeedback').textContent = '';
   document.getElementById('nextQuestionBtn').disabled = true;
+  document.getElementById('quizProgress').textContent = `第 ${quizIndex + 1} 題 / 共 ${quizQueue.length} 題`;
 
-  const pool = cat.items.filter((_, i) => i !== itemIdx).map(x => x.zh);
+  const correctAnswer = quizDirection === 'jp2zh' ? item.zh : item.jp;
+  const pool = cat.items
+    .filter((_, i) => i !== itemIdx)
+    .map(x => quizDirection === 'jp2zh' ? x.zh : x.jp);
   const wrongs = shuffle(pool).slice(0, 3);
-  const options = shuffle([item.zh, ...wrongs]);
+  const options = shuffle([correctAnswer, ...wrongs]);
 
   const optWrap = document.getElementById('quizOptions');
   optWrap.innerHTML = '';
@@ -1886,7 +1951,7 @@ function renderQuizQuestion() {
     const btn = document.createElement('button');
     btn.className = 'quiz-option';
     btn.textContent = opt;
-    btn.addEventListener('click', () => handleAnswer(btn, opt, item.zh));
+    btn.addEventListener('click', () => handleAnswer(btn, opt, correctAnswer));
     optWrap.appendChild(btn);
   });
 
@@ -1909,15 +1974,33 @@ function handleAnswer(btn, chosen, correct) {
   }
   document.getElementById('scoreText').textContent = `${quizScore} / ${quizIndex + 1}`;
   document.getElementById('nextQuestionBtn').disabled = false;
+
+  if (chosen === correct) {
+    autoAdvanceTimer = setTimeout(() => {
+      autoAdvanceTimer = null;
+      goToNextQuestion();
+    }, 600);
+  }
 }
 
-document.getElementById('nextQuestionBtn').addEventListener('click', () => {
+function goToNextQuestion() {
   quizIndex++;
   if (quizIndex >= quizQueue.length) {
     showQuizResult();
   } else {
     renderQuizQuestion();
   }
+}
+
+document.getElementById('nextQuestionBtn').addEventListener('click', () => {
+  if (autoAdvanceTimer) { clearTimeout(autoAdvanceTimer); autoAdvanceTimer = null; }
+  goToNextQuestion();
+});
+
+document.getElementById('directionToggleBtn').addEventListener('click', (e) => {
+  quizDirection = quizDirection === 'jp2zh' ? 'zh2jp' : 'jp2zh';
+  e.target.textContent = quizDirection === 'jp2zh' ? '切換為「中→日」' : '切換為「日→中」';
+  initQuiz();
 });
 
 function showQuizResult() {
@@ -2248,6 +2331,7 @@ document.getElementById('themeToggle').addEventListener('click', () => {
 /* ---------- init ---------- */
 buildCatTabs();
 renderRef();
+refreshDirectionToggleVisibility();
 
 </script>
 </body>
